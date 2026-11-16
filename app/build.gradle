@@ -1,0 +1,64 @@
+plugins {
+    id 'com.android.application'
+}
+
+// مفتاح التوقيع يأتي من GitHub Actions (السر SIGN_PASS). بدونه يُبنى إصدار تجريبي فقط.
+def ksPath = System.getenv('KH_KEYSTORE')
+
+android {
+    namespace 'com.feras.khatawati'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.feras.khatawati'
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName '1.0'
+    }
+
+    signingConfigs {
+        if (ksPath) {
+            release {
+                storeFile file(ksPath)
+                storePassword System.getenv('KH_PASS')
+                keyAlias 'khatawati'
+                keyPassword System.getenv('KH_PASS')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (ksPath) signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    // ملفات «ما الجديد» تُضمَّن داخل التطبيق من مجلد changelogs
+    sourceSets {
+        main {
+            assets.srcDir '../changelogs'
+        }
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+
+    applicationVariants.configureEach { variant ->
+        variant.outputs.configureEach {
+            outputFileName = "Khatawati-${variant.versionName}.apk"
+        }
+    }
+}
+
+dependencies {
+    implementation 'com.google.android.gms:play-services-location:21.3.0'
+}
