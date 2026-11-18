@@ -823,7 +823,18 @@ public class MainActivity extends Activity implements SensorEventListener {
                     .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
             try { startActivityForResult(i, RC_ADHAN); } catch (ActivityNotFoundException e) { toast("لا يوجد مدير ملفات"); }
         }));
-        c.addView(hint("الملفات تُنسخ داخل التطبيق، فلا يتأثر الأذان إذا حذفتها لاحقاً من التنزيلات. اضغط على الاسم لتغييره."));
+        TextView net = button("🌐 تنزيل أصوات جاهزة", v -> openCatalog());
+        net.setBackground(rounded(CAR));
+        c.addView(net);
+        TextView link = button("🔗 تنزيل من رابط", v -> askText("الصق رابط ملف الأذان المباشر (mp3)", "https://", url -> {
+            if (!url.startsWith("http")) { toast("الرابط يجب أن يبدأ بـ http"); return; }
+            askText("اسم هذا الأذان", AdhanLib.nameFromUrl(url), nm -> downloadSound(url, nm));
+        }));
+        link.setBackground(rounded(CARD_LIGHT));
+        link.setTextColor(TXT);
+        c.addView(link);
+        c.addView(hint("الملفات تُحفظ داخل التطبيق وتعمل بدون إنترنت. اضغط على الاسم لتغييره. "
+                + "روابط Google Drive العادية لا تعمل لأنها تفتح صفحة؛ استخدم رابط تنزيل مباشر."));
         col.addView(c);
 
         // الخلفية والبطارية
@@ -1027,6 +1038,91 @@ public class MainActivity extends Activity implements SensorEventListener {
     }
 
     // ───────── مكتبة الأذان ─────────
+
+    static final int CARD_LIGHT = 0xFF2C3A4A;
+
+    GradientDrawable rounded(int color) {
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(color);
+        g.setCornerRadius(dp(12));
+        return g;
+    }
+
+    void openCatalog() {
+        AlertDialog wait = dlg().setMessage("جارٍ جلب قائمة الأصوات…").setCancelable(false).show();
+        new Thread(() -> {
+            try {
+                ArrayList<AdhanLib.Item> items = AdhanLib.catalog();
+                runOnUiThread(() -> { dismiss(wait); showCatalog(items); });
+            } catch (Throwable e) {
+                runOnUiThread(() -> {
+                    dismiss(wait);
+                    alert("تعذّر جلب القائمة", "تأكد من الإنترنت وحاول مرة أخرى.\n(" + e.getMessage() + ")");
+                });
+            }
+        }).start();
+    }
+
+    void showCatalog(ArrayList<AdhanLib.Item> items) {
+        if (isFinishing()) return;
+        if (items.isEmpty()) {
+            dlg().setTitle("🌐 القائمة فارغة")
+                    .setMessage("لم تُضف أي أصوات بعد إلى ملف adhan.json في المستودع.\nاضغط «تعديل القائمة» لإضافة الاسم والرابط لكل صوت.")
+                    .setPositiveButton("تعديل القائمة", (d, w) -> openUrl(AdhanLib.CATALOG_EDIT))
+                    .setNegativeButton("إغلاق", null).show();
+            return;
+        }
+        String[] names = new String[items.size()];
+        for (int i = 0; i < items.size(); i++) {
+            AdhanLib.Item it = items.get(i);
+            names[i] = (AdhanLib.hasSrc(this, it.url) ? "✅ " : "⬇️ ") + it.name + (it.note.isEmpty() ? "" : "  (" + it.note + ")");
+        }
+        dlg().setTitle("🌐 أصوات جاهزة للتنزيل").setItems(names, (d, w) -> {
+            AdhanLib.Item it = items.get(w);
+            if (AdhanLib.hasSrc(this, it.url)) {
+                dlg().setMessage("«" + it.name + "» موجود في مكتبتك. تنزيله مرة أخرى؟")
+                        .setPositiveButton("تنزيل", (d2, w2) -> downloadSound(it.url, it.name))
+                        .setNegativeButton("إلغاء", null).show();
+            } else {
+                downloadSound(it.url, it.name);
+            }
+        }).setNeutralButton("تعديل القائمة", (d, w) -> openUrl(AdhanLib.CATALOG_EDIT))
+                .setNegativeButton("إغلاق", null).show();
+    }
+
+    void openUrl(String u) {
+        try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(u))); } catch (Throwable ignored) { }
+    }
+
+    void downloadSound(String url, String name) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(24), dp(16), dp(24), dp(8));
+        ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        bar.setMax(100);
+        TextView pct = tv("…", 15, TXT, false);
+        pct.setGravity(Gravity.CENTER);
+        box.addView(bar, new LinearLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT));
+        box.addView(pct);
+        AlertDialog d = dlg().setTitle("جارٍ تنزيل «" + name + "»").setView(box).setCancelable(false).show();
+        new Thread(() -> {
+            try {
+                AdhanLib.Sound s = AdhanLib.addFromUrl(this, url, name,
+                        x -> runOnUiThread(() -> { bar.setProgress(x); pct.setText(x + "%"); }));
+                runOnUiThread(() -> {
+                    dismiss(d);
+                    if (p.getString("adhan_main", "").isEmpty()) p.edit().putString("adhan_main", s.id).apply();
+                    toast("✅ أُضيف «" + s.name + "» إلى مكتبة الأذان");
+                    show(3);
+                });
+            } catch (Throwable e) {
+                runOnUiThread(() -> {
+                    dismiss(d);
+                    alert("لم يكتمل التنزيل", String.valueOf(e.getMessage()));
+                });
+            }
+        }).start();
+    }
 
     void addSounds(Intent data) {
         ArrayList<Uri> uris = new ArrayList<>();
