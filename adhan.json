@@ -1,6 +1,104 @@
 {
   "sounds": [
-    {"name": "أذان 1", "url": "https://رابط-الملف.mp3"},
-    {"name": "أذان الفجر", "url": "https://رابط-آخر.mp3", "note": "للفجر"}
+    {
+      "name": "أحمد جلال يحيى - أذان قطر (1)",
+      "url": "https://audio.islamweb.net/audio/download/673506",
+      "note": "إسلام ويب"
+    },
+    {
+      "name": "أحمد جلال يحيى - أذان قطر (2)",
+      "url": "https://audio.islamweb.net/audio/download/673509",
+      "note": "إسلام ويب"
+    },
+    {
+      "name": "رابح بن دراح الجزائري",
+      "url": "https://audio.islamweb.net/audio/download/456572",
+      "note": "إسلام ويب"
+    },
+    {
+      "name": "أحمد الكوردي",
+      "url": "https://audio.islamweb.net/audio/download/457131",
+      "note": "إسلام ويب"
+    },
+    {
+      "name": "أدهم الشرقاوي",
+      "url": "https://audio.islamweb.net/audio/download/457296",
+      "note": "إسلام ويب"
+    },
+    {
+      "name": "حمزة المجالي",
+      "url": "https://audio.islamweb.net/audio/download/458122",
+      "note": "إسلام ويب"
+    },
+    {
+      "name": "محمد الدمرداش",
+      "url": "https://audio.islamweb.net/audio/download/253116",
+      "note": "إسلام ويب"
+    },
+    {
+      "name": "إسماعيل الشيخ - أذان جزر هاواي",
+      "url": "https://audio.islamweb.net/audio/download/253278",
+      "note": "إسلام ويب"
+    },
+    {
+      "name": "محمد أبو المكارم",
+      "url": "https://audio.islamweb.net/audio/download/253572",
+      "note": "إسلام ويب"
+    },
+    {
+      "name": "الدوكالي محمد العالم",
+      "url": "https://audio.islamweb.net/audio/download/254618",
+      "note": "إسلام ويب"
+    },
+    {
+      "name": "أبو ياسر الجزائري",
+      "url": "https://audio.islamweb.net/audio/download/320111",
+      "note": "إسلام ويب"
+    },
+    {
+      "name": "محمد صلاح الدين كبارة (1)",
+      "url": "https://audio.islamweb.net/audio/download/320766",
+      "note": "إسلام ويب"
+    },
+    {
+      "name": "محمد صلاح الدين كبارة (2)",
+      "url": "https://audio.islamweb.net/audio/download/320767",
+      "note": "إسلام ويب"
+    },
+    {
+      "name": "عبد المنعم عبد المبدئ",
+      "url": "https://audio.islamweb.net/audio/download/321007",
+      "note": "إسلام ويب"
+    },
+    {
+      "name": "عبدالله المكنوي",
+      "url": "https://audio.islamweb.net/audio/download/321515",
+      "note": "إسلام ويب"
+    },
+    {
+      "name": "اخدام بن المداني",
+      "url": "https://audio.islamweb.net/audio/download/321782",
+      "note": "إسلام ويب"
+    },
+    {
+      "name": "ناصر العبد (1)",
+      "url": "https://audio.islamweb.net/audio/download/458027",
+      "note": "إسلام ويب"
+    },
+    {
+      "name": "ناصر العبد (2)",
+      "url": "https://audio.islamweb.net/audio/download/458028",
+      "note": "إسلام ويب"
+    },
+    {
+      "name": "ناصر العبد (3)",
+      "url": "https://audio.islamweb.net/audio/download/349248",
+      "note": "إسلام ويب"
+    },
+    {
+      "name": "طارق فتحي أحمد",
+      "url": "https://audio.islamweb.net/audio/download/349515",
+      "note": "إسلام ويب"
+    }
   ]
 }
