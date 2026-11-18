@@ -55,28 +55,38 @@ public final class Updater {
         return new String(bo.toByteArray(), StandardCharsets.UTF_8);
     }
 
+    /** أحدث إصدار رقمي (يتجاهل أي إصدار اسمه ليس رقماً مثل «adhan»، والتجريبية والمسودات). */
     public static Info fetch() throws Exception {
-        HttpURLConnection con = open(API);
+        HttpURLConnection con = open("https://api.github.com/repos/" + REPO + "/releases?per_page=30");
         con.setRequestProperty("Accept", "application/vnd.github+json");
         int code = con.getResponseCode();
-        if (code == 404) throw new Exception("لا يوجد إصدار منشور بعد");
         if (code != 200) throw new Exception("HTTP " + code);
         String body;
         try (InputStream in = con.getInputStream()) { body = readAll(in); }
-        JSONObject j = new JSONObject(body);
-        Info i = new Info();
-        i.version = j.optString("tag_name", "").replaceFirst("^[vV]", "");
-        i.notes = j.optString("body", "");
-        i.page = j.optString("html_url", "https://github.com/" + REPO + "/releases");
-        JSONArray as = j.optJSONArray("assets");
-        if (as != null) for (int k = 0; k < as.length(); k++) {
-            JSONObject a = as.getJSONObject(k);
-            if (a.optString("name").toLowerCase().endsWith(".apk")) {
-                i.apkUrl = a.optString("browser_download_url");
-                break;
+        JSONArray arr = new JSONArray(body);
+        Info best = null;
+        for (int r = 0; r < arr.length(); r++) {
+            JSONObject j = arr.getJSONObject(r);
+            if (j.optBoolean("draft") || j.optBoolean("prerelease")) continue;
+            String tag = j.optString("tag_name", "");
+            if (!tag.matches("[vV]?\\d+(\\.\\d+)*")) continue;
+            Info i = new Info();
+            i.version = tag.replaceFirst("^[vV]", "");
+            i.notes = j.optString("body", "");
+            i.page = j.optString("html_url", "https://github.com/" + REPO + "/releases");
+            JSONArray as = j.optJSONArray("assets");
+            if (as != null) for (int k = 0; k < as.length(); k++) {
+                JSONObject a = as.getJSONObject(k);
+                if (a.optString("name").toLowerCase().endsWith(".apk")) {
+                    i.apkUrl = a.optString("browser_download_url");
+                    break;
+                }
             }
+            if (i.apkUrl.isEmpty()) continue;
+            if (best == null || cmp(i.version, best.version) > 0) best = i;
         }
-        return i;
+        if (best == null) throw new Exception("لا يوجد إصدار منشور بعد");
+        return best;
     }
 
     public static String current(Context c) {

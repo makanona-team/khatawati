@@ -107,3 +107,5 @@ jobs:
           name: خطواتي ${{ env.VERSION }}
           body_path: ${{ runner.temp }}/notes.md
           files: app/build/outputs/apk/release/Khatawati-*.apk
+          make_latest: true
+          prerelease: false

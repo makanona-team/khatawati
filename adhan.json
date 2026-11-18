@@ -1,6 +1,16 @@
 {
   "sounds": [
     {
+      "name": "مجموعة 90 أذان (أرشيف الإنترنت)",
+      "archive": "90---azan---90---azan--many----sound----mp3---alazan",
+      "note": "archive.org"
+    },
+    {
+      "name": "أذان الفجر (ملفي)",
+      "url": "https://github.com/makanona-team/khatawati/releases/download/adhan/Azan-alfajer.mp3",
+      "note": "للفجر"
+    },
+    {
       "name": "أحمد جلال يحيى - أذان قطر (1)",
       "url": "https://audio.islamweb.net/audio/download/673506",
       "note": "إسلام ويب"

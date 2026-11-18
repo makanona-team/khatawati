@@ -12,7 +12,16 @@ import org.json.JSONObject;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.net.CookieHandler;
+import java.net.CookieManager;
+import java.net.CookiePolicy;
+import java.net.HttpURLConnection;
+import java.net.URI;
+import java.net.URL;
+import java.net.URLEncoder;
 import java.util.ArrayList;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * مكتبة أصوات الأذان: ملفات يضيفها المستخدم من هاتفه، تُنسخ داخل التطبيق (فلا تتعطل إن حُذف الأصل).
@@ -109,9 +118,18 @@ final class AdhanLib {
     /** رابط قائمة الأصوات الجاهزة (يعدّلها صاحب المستودع). */
     static final String CATALOG = "https://raw.githubusercontent.com/" + Updater.REPO + "/main/adhan.json";
     static final String CATALOG_EDIT = "https://github.com/" + Updater.REPO + "/edit/main/adhan.json";
+    static final String UA = "Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36";
+
+    static {
+        try {
+            if (CookieHandler.getDefault() == null) CookieHandler.setDefault(new CookieManager(null, CookiePolicy.ACCEPT_ALL));
+        } catch (Throwable ignored) { }
+    }
 
     static class Item {
-        String name, url, note;
+        String name, url, note = "";
+        /** معرّف مجموعة على archive.org إن كان العنصر مجموعة. */
+        String archive;
     }
 
     static ArrayList<Item> catalog() throws Exception {
@@ -130,8 +148,15 @@ final class AdhanLib {
             it.name = o.optString("name", "").trim();
             it.url = o.optString("url", "").trim();
             it.note = o.optString("note", "").trim();
+            String arch = o.optString("archive", "").trim();
+            if (!arch.isEmpty()) {
+                it.archive = arch;
+                it.url = "https://archive.org/details/" + arch;
+            } else {
+                it.archive = archiveId(it.url);
+            }
             if (!it.url.startsWith("http")) continue;
-            if (it.name.isEmpty()) it.name = nameFromUrl(it.url);
+            if (it.name.isEmpty()) it.name = it.archive != null ? it.archive : nameFromUrl(it.url);
             out.add(it);
         }
         return out;
@@ -144,23 +169,194 @@ final class AdhanLib {
 
     static String nameFromUrl(String url) {
         String path = Uri.parse(url).getLastPathSegment();
-        if (path == null || path.isEmpty()) return "أذان";
+        if (path == null || path.isEmpty() || path.matches("\\d+")) return "أذان";
         int dot = path.lastIndexOf('.');
-        return (dot > 0 ? path.substring(0, dot) : path).replace('_', ' ').replace('-', ' ');
+        return (dot > 0 ? path.substring(0, dot) : path).replace('_', ' ').replace('-', ' ').trim();
     }
 
-    /** ينزّل ملف أذان من رابط مباشر ويضيفه للمكتبة. */
-    static Sound addFromUrl(Context c, String url, String name, Updater.Progress pr) throws Exception {
+    // ───────── archive.org ─────────
+
+    /** معرّف مجموعة archive.org من رابط details أو download (بدون ملف محدد). */
+    static String archiveId(String url) {
+        if (url == null) return null;
+        Matcher m = Pattern.compile("archive\\.org/(?:details|download)/([^/?#]+)/?(?:[?#].*)?$").matcher(url.trim());
+        return m.find() ? Uri.decode(m.group(1)) : null;
+    }
+
+    static String encodePath(String name) {
+        StringBuilder sb = new StringBuilder();
+        for (String part : name.split("/")) {
+            if (sb.length() > 0) sb.append('/');
+            try { sb.append(URLEncoder.encode(part, "UTF-8").replace("+", "%20")); } catch (Exception e) { sb.append(part); }
+        }
+        return sb.toString();
+    }
+
+    /** كل الملفات الصوتية في مجموعة archive.org (mp3 أولاً، وإلا ogg/m4a). */
+    static ArrayList<Item> archiveFiles(String id) throws Exception {
+        HttpURLConnection con = connect("https://archive.org/metadata/" + encodePath(id), null);
+        int code = con.getResponseCode();
+        if (code != 200) throw new Exception("archive.org: HTTP " + code);
+        String body;
+        try (InputStream in = con.getInputStream()) { body = Updater.readAll(in); }
+        JSONObject j = new JSONObject(body);
+        JSONArray files = j.optJSONArray("files");
+        if (files == null || files.length() == 0) throw new Exception("المجموعة غير موجودة أو فارغة");
+        ArrayList<Item> mp3 = new ArrayList<>(), other = new ArrayList<>();
+        for (int i = 0; i < files.length(); i++) {
+            JSONObject f = files.getJSONObject(i);
+            String n = f.optString("name", "");
+            String low = n.toLowerCase();
+            boolean isMp3 = low.endsWith(".mp3");
+            if (!isMp3 && !low.endsWith(".ogg") && !low.endsWith(".m4a") && !low.endsWith(".opus")) continue;
+            Item it = new Item();
+            String base = n.contains("/") ? n.substring(n.lastIndexOf('/') + 1) : n;
+            int dot = base.lastIndexOf('.');
+            String title = f.optString("title", "").trim();
+            it.name = !title.isEmpty() ? title : (dot > 0 ? base.substring(0, dot) : base).replace('_', ' ').trim();
+            if (it.name.replaceAll("[-\\s\\d]", "").isEmpty()) it.name = "أذان " + it.name.replaceAll("[^\\d]", "");
+            it.url = "https://archive.org/download/" + encodePath(id) + "/" + encodePath(n);
+            long size = f.optLong("size", 0);
+            if (size > 0) it.note = String.format(java.util.Locale.US, "%.1f MB", size / 1048576.0);
+            (isMp3 ? mp3 : other).add(it);
+        }
+        ArrayList<Item> out = mp3.isEmpty() ? other : mp3;
+        out.sort((a, b) -> a.url.compareTo(b.url));
+        if (out.isEmpty()) throw new Exception("لا توجد ملفات صوتية في هذه المجموعة");
+        return out;
+    }
+
+    // ───────── الاتصال وفك الروابط ─────────
+
+    /** يحوّل الأحرف العربية والمسافات في الرابط إلى صيغة مقبولة. */
+    static String safe(String u) {
+        try {
+            URL x = new URL(u);
+            return new URI(x.getProtocol(), x.getUserInfo(), x.getHost(), x.getPort(), Uri.decode(x.getPath()),
+                    x.getQuery() == null ? null : Uri.decode(x.getQuery()), x.getRef()).toASCIIString();
+        } catch (Throwable e) {
+            return u.replace(" ", "%20");
+        }
+    }
+
+    /** اتصال كالمتصفح مع تتبّع التحويلات (حتى بين http و https). */
+    static HttpURLConnection connect(String url, String referer) throws Exception {
+        String u = safe(url);
+        for (int i = 0; i < 8; i++) {
+            HttpURLConnection c = (HttpURLConnection) new URL(u).openConnection();
+            c.setInstanceFollowRedirects(false);
+            c.setConnectTimeout(20_000);
+            c.setReadTimeout(60_000);
+            c.setRequestProperty("User-Agent", UA);
+            c.setRequestProperty("Accept", "*/*");
+            c.setRequestProperty("Accept-Language", "ar,en;q=0.8");
+            if (referer != null) c.setRequestProperty("Referer", referer);
+            int code = c.getResponseCode();
+            if (code >= 300 && code < 400) {
+                String loc = c.getHeaderField("Location");
+                c.disconnect();
+                if (loc == null) throw new Exception("تحويل بلا عنوان");
+                referer = u;
+                u = safe(new URL(new URL(u), loc).toString());
+                continue;
+            }
+            return c;
+        }
+        throw new Exception("تحويلات كثيرة من الموقع");
+    }
+
+    static boolean audioName(String u) {
+        String p = Uri.parse(u).getPath();
+        if (p == null) return false;
+        p = p.toLowerCase();
+        return p.endsWith(".mp3") || p.endsWith(".m4a") || p.endsWith(".ogg") || p.endsWith(".aac") || p.endsWith(".wav") || p.endsWith(".opus");
+    }
+
+    static boolean isAudio(HttpURLConnection c) {
+        String type = c.getContentType() == null ? "" : c.getContentType().toLowerCase();
+        String cd = c.getHeaderField("Content-Disposition");
+        return type.startsWith("audio/") || type.contains("octet-stream") || type.contains("mpeg") || type.contains("ogg")
+                || (cd != null && cd.toLowerCase().contains("attachment")) || (!type.contains("html") && audioName(c.getURL().toString()));
+    }
+
+    static String readLimited(InputStream in, int max) throws Exception {
+        java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+        byte[] b = new byte[16384];
+        int n;
+        while ((n = in.read(b)) > 0 && bo.size() < max) bo.write(b, 0, n);
+        return new String(bo.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    /** يبحث في صفحة HTML عن رابط ملف صوتي (أو تحويل إلى صفحة أخرى). */
+    static String findLink(String html, String base) {
+        String b = html.replace("\\/", "/").replace("&amp;", "&");
+        Pattern[] ps = {
+                Pattern.compile("(https?:)?//[^\\s\"'<>()]+?\\.(mp3|m4a|ogg|aac|wav|opus)(\\?[^\\s\"'<>()]*)?", Pattern.CASE_INSENSITIVE),
+                Pattern.compile("(?:href|src|file|url|data-[a-z-]+)\\s*[=:]\\s*[\"']([^\"']+\\.(?:mp3|m4a|ogg|aac|wav|opus)(?:\\?[^\"']*)?)[\"']", Pattern.CASE_INSENSITIVE),
+                Pattern.compile("http-equiv=[\"']?refresh[\"']?[^>]*url=([^\"'>\\s]+)", Pattern.CASE_INSENSITIVE),
+                Pattern.compile("(?:window\\.)?location(?:\\.href)?\\s*=\\s*[\"']([^\"']+)[\"']", Pattern.CASE_INSENSITIVE),
+        };
+        for (int k = 0; k < ps.length; k++) {
+            Matcher m = ps[k].matcher(b);
+            while (m.find()) {
+                String cand = k == 0 ? m.group() : m.group(1);
+                if (cand.startsWith("//")) cand = "https:" + cand;
+                try {
+                    String abs = new URL(new URL(base), cand).toString();
+                    if (abs.equals(base)) continue;
+                    return abs;
+                } catch (Exception ignored) { }
+            }
+        }
+        return null;
+    }
+
+    /** {رابط الملف الصوتي المباشر، الصفحة المُحيلة} من أي رابط: مباشر، صفحة تحميل، تحويلات، أو مجموعة archive.org. */
+    static String[] resolve(String url) throws Exception {
         String u = url.trim();
         if (u.contains("dropbox.com")) u = u.replace("dl=0", "dl=1");
-        java.net.HttpURLConnection con = Updater.open(u);
-        con.setReadTimeout(60_000);
+        String ref = null;
+        for (int depth = 0; depth < 4; depth++) {
+            String arch = archiveId(u);
+            if (arch != null) return new String[]{archiveFiles(arch).get(0).url, null};
+            HttpURLConnection c = connect(u, ref);
+            int code = c.getResponseCode();
+            if (code == 403) throw new Exception("الموقع رفض الطلب (403)");
+            if (code == 404) throw new Exception("الملف غير موجود على الموقع (404)");
+            if (code != 200 && code != 206) throw new Exception("الموقع أعاد خطأ HTTP " + code);
+            String fin = c.getURL().toString();
+            if (isAudio(c)) { c.disconnect(); return new String[]{fin, ref}; }
+            String type = c.getContentType() == null ? "" : c.getContentType().toLowerCase();
+            if (!type.contains("html") && !type.contains("text")) { c.disconnect(); return new String[]{fin, ref}; }
+            String body;
+            try (InputStream in = c.getInputStream()) { body = readLimited(in, 3 * 1024 * 1024); }
+            String next = findLink(body, fin);
+            if (next == null) throw new Exception("الرابط يفتح صفحة لا تحتوي ملفاً صوتياً مباشراً");
+            ref = fin;
+            u = next;
+        }
+        throw new Exception("تعذّر الوصول إلى الملف الصوتي من هذا الرابط");
+    }
+
+    /** رسالة خطأ مفهومة. */
+    static String why(Throwable e) {
+        if (e instanceof java.net.UnknownHostException) return "لا يوجد اتصال بالإنترنت، أو الموقع محجوب في شبكتك";
+        if (e instanceof java.net.SocketTimeoutException) return "انتهت مهلة الاتصال بالموقع؛ حاول مرة أخرى";
+        if (e instanceof javax.net.ssl.SSLException) return "مشكلة في الاتصال الآمن بالموقع";
+        if (e instanceof java.net.ConnectException) return "تعذّر الاتصال بالموقع";
+        String m = e.getMessage();
+        return m == null || m.isEmpty() ? e.getClass().getSimpleName() : m;
+    }
+
+    /** ينزّل ملف أذان من أي رابط ويضيفه للمكتبة. */
+    static Sound addFromUrl(Context c, String url, String name, Updater.Progress pr) throws Exception {
+        String[] r = resolve(url);
+        HttpURLConnection con = connect(r[0], r[1]);
         int code = con.getResponseCode();
-        if (code != 200) throw new Exception("HTTP " + code);
+        if (code != 200 && code != 206) throw new Exception("الموقع أعاد خطأ HTTP " + code);
         String type = con.getContentType() == null ? "" : con.getContentType().toLowerCase();
         if (type.startsWith("text/html")) throw new Exception("الرابط يفتح صفحة وليس ملفاً صوتياً مباشراً");
         String last = Uri.parse(con.getURL().toString()).getLastPathSegment();
-        if (last == null) last = Uri.parse(u).getLastPathSegment();
         String ext = ".mp3";
         if (last != null) {
             int dot = last.lastIndexOf('.');
@@ -171,7 +367,7 @@ final class AdhanLib {
         else if (type.contains("wav")) ext = ".wav";
         Sound s = new Sound();
         s.id = "a" + System.currentTimeMillis() + (int) (Math.random() * 1000);
-        s.name = name == null || name.trim().isEmpty() ? nameFromUrl(u) : name.trim();
+        s.name = name == null || name.trim().isEmpty() ? nameFromUrl(r[0]) : name.trim();
         s.file = s.id + ext;
         s.src = url.trim();
         File f = new File(dir(c), s.file);
@@ -193,17 +389,16 @@ final class AdhanLib {
             throw e;
         }
         if (f.length() < 1024) { f.delete(); throw new Exception("الملف صغير جداً أو ليس ملفاً صوتياً"); }
-        // تأكد أنه صوت يمكن تشغيله
-        android.media.MediaMetadataRetriever r = new android.media.MediaMetadataRetriever();
+        android.media.MediaMetadataRetriever mr = new android.media.MediaMetadataRetriever();
         try {
-            r.setDataSource(f.getAbsolutePath());
-            if (r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO) == null
-                    && r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION) == null) throw new Exception();
+            mr.setDataSource(f.getAbsolutePath());
+            if (mr.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO) == null
+                    && mr.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION) == null) throw new Exception();
         } catch (Exception e) {
             f.delete();
             throw new Exception("الملف المنزّل ليس ملفاً صوتياً صالحاً");
         } finally {
-            try { r.release(); } catch (Exception ignored) { }
+            try { mr.release(); } catch (Exception ignored) { }
         }
         synchronized (AdhanLib.class) {
             ArrayList<Sound> l = list(c);

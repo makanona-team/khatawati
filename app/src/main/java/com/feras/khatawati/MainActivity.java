@@ -153,6 +153,7 @@ public class MainActivity extends Activity implements SensorEventListener {
     @Override
     protected void onPause() {
         super.onPause();
+        stopPreview();
         h.removeCallbacks(ticker);
         if (sm != null) sm.unregisterListener(this);
     }
@@ -828,7 +829,9 @@ public class MainActivity extends Activity implements SensorEventListener {
         c.addView(net);
         TextView link = button("🔗 تنزيل من رابط", v -> askText("الصق رابط ملف الأذان المباشر (mp3)", "https://", url -> {
             if (!url.startsWith("http")) { toast("الرابط يجب أن يبدأ بـ http"); return; }
-            askText("اسم هذا الأذان", AdhanLib.nameFromUrl(url), nm -> downloadSound(url, nm));
+            String arch = AdhanLib.archiveId(url);
+            if (arch != null) { openArchive(arch, arch); return; }
+            askText("اسم هذا الأذان", AdhanLib.nameFromUrl(url), nm -> itemActions(nm, url));
         }));
         link.setBackground(rounded(CARD_LIGHT));
         link.setTextColor(TXT);
@@ -1075,19 +1078,109 @@ public class MainActivity extends Activity implements SensorEventListener {
         String[] names = new String[items.size()];
         for (int i = 0; i < items.size(); i++) {
             AdhanLib.Item it = items.get(i);
-            names[i] = (AdhanLib.hasSrc(this, it.url) ? "✅ " : "⬇️ ") + it.name + (it.note.isEmpty() ? "" : "  (" + it.note + ")");
+            names[i] = (it.archive != null ? "📦 " : AdhanLib.hasSrc(this, it.url) ? "✅ " : "🎵 ") + it.name + (it.note.isEmpty() ? "" : "  (" + it.note + ")");
         }
         dlg().setTitle("🌐 أصوات جاهزة للتنزيل").setItems(names, (d, w) -> {
             AdhanLib.Item it = items.get(w);
-            if (AdhanLib.hasSrc(this, it.url)) {
-                dlg().setMessage("«" + it.name + "» موجود في مكتبتك. تنزيله مرة أخرى؟")
-                        .setPositiveButton("تنزيل", (d2, w2) -> downloadSound(it.url, it.name))
-                        .setNegativeButton("إلغاء", null).show();
-            } else {
-                downloadSound(it.url, it.name);
-            }
+            if (it.archive != null) openArchive(it.archive, it.name);
+            else itemActions(it.name, it.url);
         }).setNeutralButton("تعديل القائمة", (d, w) -> openUrl(AdhanLib.CATALOG_EDIT))
                 .setNegativeButton("إغلاق", null).show();
+    }
+
+    /** مجموعة archive.org: قائمة كل ملفاتها. */
+    void openArchive(String id, String title) {
+        AlertDialog wait = dlg().setMessage("جارٍ قراءة ملفات المجموعة…").setCancelable(false).show();
+        new Thread(() -> {
+            try {
+                ArrayList<AdhanLib.Item> files = AdhanLib.archiveFiles(id);
+                runOnUiThread(() -> {
+                    dismiss(wait);
+                    if (isFinishing()) return;
+                    String[] names = new String[files.size()];
+                    for (int i = 0; i < files.size(); i++) {
+                        AdhanLib.Item f = files.get(i);
+                        names[i] = (AdhanLib.hasSrc(this, f.url) ? "✅ " : "🎵 ") + f.name + (f.note.isEmpty() ? "" : "  · " + f.note);
+                    }
+                    dlg().setTitle("📦 " + title + " (" + files.size() + ")")
+                            .setItems(names, (d, w) -> itemActions(files.get(w).name, files.get(w).url))
+                            .setNegativeButton("إغلاق", null).show();
+                });
+            } catch (Throwable e) {
+                runOnUiThread(() -> {
+                    dismiss(wait);
+                    alert("تعذّر فتح المجموعة", AdhanLib.why(e));
+                });
+            }
+        }).start();
+    }
+
+    /** صوت واحد: استماع قبل التنزيل، أو تنزيل. */
+    void itemActions(String name, String url) {
+        if (isFinishing()) return;
+        boolean have = AdhanLib.hasSrc(this, url);
+        dlg().setTitle("🎵 " + name)
+                .setMessage(have ? "✅ هذا الصوت موجود في مكتبتك." : "استمع إليه أولاً، ثم نزّله إن أعجبك.")
+                .setNeutralButton("▶️ استماع", (d, w) -> preview(name, url))
+                .setPositiveButton(have ? "تنزيل مرة أخرى" : "⬇️ تنزيل", (d, w) -> downloadSound(url, name))
+                .setNegativeButton("إغلاق", null).show();
+    }
+
+    android.media.MediaPlayer previewMp;
+
+    void stopPreview() {
+        if (previewMp != null) {
+            try { previewMp.stop(); } catch (Throwable ignored) { }
+            try { previewMp.release(); } catch (Throwable ignored) { }
+            previewMp = null;
+        }
+    }
+
+    /** يشغّل الصوت من الإنترنت مباشرة دون تنزيله. */
+    void preview(String name, String url) {
+        stopPreview();
+        TextView msg = tv("⏳ جارٍ الاتصال…", 16, TXT, false);
+        msg.setPadding(dp(24), dp(16), dp(24), dp(8));
+        AlertDialog d = dlg().setTitle("▶️ " + name).setView(msg)
+                .setPositiveButton("⬇️ تنزيل", (x, w) -> { stopPreview(); downloadSound(url, name); })
+                .setNegativeButton("⏹ إيقاف", (x, w) -> stopPreview())
+                .setOnDismissListener(x -> stopPreview())
+                .show();
+        new Thread(() -> {
+            try {
+                String[] r = AdhanLib.resolve(url);
+                runOnUiThread(() -> {
+                    if (!d.isShowing()) return;
+                    try {
+                        HashMap<String, String> hd = new HashMap<>();
+                        hd.put("User-Agent", AdhanLib.UA);
+                        if (r[1] != null) hd.put("Referer", r[1]);
+                        android.media.MediaPlayer mp = new android.media.MediaPlayer();
+                        previewMp = mp;
+                        mp.setAudioAttributes(new android.media.AudioAttributes.Builder()
+                                .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH).build());
+                        mp.setDataSource(this, Uri.parse(r[0]), hd);
+                        mp.setOnPreparedListener(x -> {
+                            if (previewMp != x) return;
+                            x.start();
+                            msg.setText("🔊 يعمل الآن… (بمستوى صوت الوسائط)");
+                        });
+                        mp.setOnCompletionListener(x -> msg.setText("✔️ انتهى. نزّله إن أعجبك."));
+                        mp.setOnErrorListener((x, a, b) -> {
+                            msg.setText("❌ تعذّر تشغيل هذا الصوت من الإنترنت.\nجرّب «تنزيل» مباشرة.");
+                            return true;
+                        });
+                        mp.prepareAsync();
+                        msg.setText("⏳ جارٍ تحميل الصوت…");
+                    } catch (Throwable e) {
+                        msg.setText("❌ " + AdhanLib.why(e));
+                    }
+                });
+            } catch (Throwable e) {
+                runOnUiThread(() -> msg.setText("❌ " + AdhanLib.why(e)));
+            }
+        }).start();
     }
 
     void openUrl(String u) {
@@ -1118,7 +1211,7 @@ public class MainActivity extends Activity implements SensorEventListener {
             } catch (Throwable e) {
                 runOnUiThread(() -> {
                     dismiss(d);
-                    alert("لم يكتمل التنزيل", String.valueOf(e.getMessage()));
+                    alert("لم يكتمل التنزيل", AdhanLib.why(e));
                 });
             }
         }).start();
