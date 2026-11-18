@@ -146,6 +146,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         h.post(ticker);
         Updater.autoCheck(this);
         maybeWhatsNew();
+        AdhanLib.migrate(this);
         StepsWidget.update(this);
     }
 
@@ -361,6 +362,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         if (!granted(Manifest.permission.ACCESS_FINE_LOCATION)) m.add("• إذن الموقع (للمدينة ومسافة السيارة)");
         else if (Build.VERSION.SDK_INT >= 29 && !granted(Manifest.permission.ACCESS_BACKGROUND_LOCATION)) m.add("• الموقع «طوال الوقت» (للسيارة والتطبيق مغلق)");
         if (!ignoringBattery()) m.add("• استثناء التطبيق من توفير البطارية");
+        if (!canFullScreen()) m.add("• السماح بشاشة الأذان فوق شاشة القفل");
         return String.join("\n", m);
     }
 
@@ -798,19 +800,30 @@ public class MainActivity extends Activity implements SensorEventListener {
         });
         sw(c, "تنبيه الأذان", "عند دخول وقت كل صلاة", "adhan_on", true, this::prayerChanged);
         sw(c, "تشغيل صوت الأذان", "إذا أطفأته يظهر إشعار صامت فقط", "adhan_sound", true, null);
-        String an = p.getString("adhan_name", "");
-        item(c, "صوت الأذان", an.isEmpty() ? "نغمة المنبّه الافتراضية" : an, v ->
-                choose("صوت الأذان", new String[]{"🎵 اختر ملف أذان من الهاتف", "↩️ نغمة المنبّه الافتراضية"}, w -> {
-                    if (w == 0) {
-                        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("audio/*");
-                        try { startActivityForResult(i, RC_ADHAN); } catch (ActivityNotFoundException e) { toast("لا يوجد مدير ملفات"); }
-                    } else {
-                        p.edit().remove("adhan_uri").remove("adhan_name").apply();
-                        show(3);
-                    }
-                }));
-        item(c, "▶️ تجربة صوت الأذان", "يتوقف من الإشعار", v -> AdhanService.start(this, Prayer.DHUHR, true));
-        c.addView(hint("الصوت يخرج بمستوى صوت «المنبّه» في الهاتف."));
+        item(c, "صوت الأذان (الظهر، العصر، المغرب، العشاء)", AdhanLib.label(this, p.getString("adhan_main", "")),
+                v -> pickSound(false));
+        item(c, "صوت أذان الفجر", AdhanLib.label(this, p.getString("adhan_fajr", AdhanLib.SAME)), v -> pickSound(true));
+        item(c, "▶️ تجربة أذان الظهر", "", v -> AdhanService.start(this, Prayer.DHUHR, true));
+        item(c, "▶️ تجربة أذان الفجر", "", v -> AdhanService.start(this, Prayer.FAJR, true));
+        c.addView(hint("لإيقاف الأذان: زر «إيقاف» في شاشة الأذان، أو أي زر من أزرار الصوت، أو النقر على الإشعار أو سحبه. "
+                + "الصوت يخرج بمستوى صوت «المنبّه» في الهاتف."));
+        if (!canFullScreen()) {
+            item(c, "⚠️ السماح بشاشة الأذان فوق القفل", "اضغط للتفعيل", v -> openFullScreenSettings());
+        }
+        col.addView(c);
+
+        // مكتبة الأذان
+        col.addView(section("🎵 مكتبة الأذان"));
+        c = card();
+        ArrayList<AdhanLib.Sound> lib = AdhanLib.list(this);
+        if (lib.isEmpty()) c.addView(hint("أضف ملفات أذان من هاتفك (mp3 أو غيرها)، ثم اختر منها صوت الأذان وصوت الفجر بالأعلى."));
+        for (AdhanLib.Sound s : lib) libRow(c, s);
+        c.addView(button("➕ إضافة ملفات أذان من الهاتف", v -> {
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("audio/*")
+                    .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+            try { startActivityForResult(i, RC_ADHAN); } catch (ActivityNotFoundException e) { toast("لا يوجد مدير ملفات"); }
+        }));
+        c.addView(hint("الملفات تُنسخ داخل التطبيق، فلا يتأثر الأذان إذا حذفتها لاحقاً من التنزيلات. اضغط على الاسم لتغييره."));
         col.addView(c);
 
         // الخلفية والبطارية
@@ -856,6 +869,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         s.append(granted(Manifest.permission.ACCESS_FINE_LOCATION) ? "✅" : "❌").append(" الموقع\n");
         if (Build.VERSION.SDK_INT >= 29) s.append(granted(Manifest.permission.ACCESS_BACKGROUND_LOCATION) ? "✅" : "❌").append(" الموقع طوال الوقت\n");
         s.append(ignoringBattery() ? "✅" : "❌").append(" استثناء البطارية\n");
+        s.append(canFullScreen() ? "✅" : "❌").append(" شاشة الأذان فوق القفل\n");
         s.append(p.getBoolean("ar_ok", false) ? "✅" : "⏳").append(" كشف السيارة (خدمات Google)\n");
         s.append(StepService.running ? "✅" : "❌").append(" العدّاد يعمل");
         return s.toString();
@@ -933,6 +947,14 @@ public class MainActivity extends Activity implements SensorEventListener {
             requestIgnoreBattery();
             return;
         }
+        if (!canFullScreen() && !askedThisRun.contains("fullscreen")) {
+            askedThisRun.add("fullscreen");
+            dlg().setTitle("شاشة الأذان")
+                    .setMessage("حتى تظهر شاشة الأذان وزر الإيقاف فوق شاشة القفل: فعّل «خطواتي» في الصفحة التالية ثم ارجع.")
+                    .setPositiveButton("متابعة", (d, w) -> openFullScreenSettings())
+                    .setNegativeButton("لاحقاً", (d, w) -> runSetup()).show();
+            return;
+        }
         StepService.start(this);
         show(tab);
     }
@@ -971,19 +993,12 @@ public class MainActivity extends Activity implements SensorEventListener {
     @Override
     protected void onActivityResult(int rc, int res, Intent data) {
         super.onActivityResult(rc, res, data);
-        if (res != RESULT_OK || data == null || data.getData() == null) return;
+        if (res != RESULT_OK || data == null) return;
+        if (rc == RC_ADHAN) { addSounds(data); return; }
+        if (data.getData() == null) return;
         Uri u = data.getData();
         try {
-            if (rc == RC_ADHAN) {
-                try { getContentResolver().takePersistableUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION); } catch (Throwable ignored) { }
-                String name = "ملف مختار";
-                try (Cursor c = getContentResolver().query(u, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
-                    if (c != null && c.moveToFirst()) name = c.getString(0);
-                }
-                p.edit().putString("adhan_uri", u.toString()).putString("adhan_name", name).apply();
-                toast("تم اختيار صوت الأذان: " + name);
-                show(3);
-            } else if (rc == RC_EXPORT) {
+            if (rc == RC_EXPORT) {
                 JSONObject j = Db.get(this).export();
                 j.put("settings", settingsJson());
                 try (OutputStream out = getContentResolver().openOutputStream(u, "wt")) {
@@ -1008,6 +1023,111 @@ public class MainActivity extends Activity implements SensorEventListener {
             }
         } catch (Throwable e) {
             alert("لم تنجح العملية", rc == RC_IMPORT ? "الملف ليس نسخة احتياطية من «خطواتي».\n" + e.getMessage() : String.valueOf(e.getMessage()));
+        }
+    }
+
+    // ───────── مكتبة الأذان ─────────
+
+    void addSounds(Intent data) {
+        ArrayList<Uri> uris = new ArrayList<>();
+        if (data.getClipData() != null) {
+            for (int i = 0; i < data.getClipData().getItemCount(); i++) uris.add(data.getClipData().getItemAt(i).getUri());
+        } else if (data.getData() != null) {
+            uris.add(data.getData());
+        }
+        if (uris.isEmpty()) return;
+        AlertDialog wait = dlg().setMessage("جارٍ نسخ " + uris.size() + " ملف إلى المكتبة…").setCancelable(false).show();
+        new Thread(() -> {
+            ArrayList<AdhanLib.Sound> added = new ArrayList<>();
+            int failed = 0;
+            for (Uri u : uris) {
+                try { added.add(AdhanLib.add(this, u)); } catch (Throwable e) { failed++; }
+            }
+            final int nf = failed;
+            runOnUiThread(() -> {
+                dismiss(wait);
+                if (!added.isEmpty() && p.getString("adhan_main", "").isEmpty()) {
+                    p.edit().putString("adhan_main", added.get(0).id).apply(); // أول ملف يصبح صوت الأذان إن لم يُختر صوت بعد
+                }
+                if (added.size() == 1) {
+                    AdhanLib.Sound s = added.get(0);
+                    askText("اسم هذا الأذان", s.name, x -> { AdhanLib.rename(this, s.id, x); show(3); });
+                } else {
+                    toast("أُضيف " + added.size() + " ملف" + (nf > 0 ? " · تعذّر " + nf : ""));
+                }
+                show(3);
+            });
+        }).start();
+    }
+
+    interface TextCb { void on(String v); }
+
+    void askText(String title, String cur, TextCb cb) {
+        EditText e = new EditText(this);
+        e.setText(cur);
+        e.setSelectAllOnFocus(true);
+        e.setTextColor(TXT);
+        FrameLayout f = new FrameLayout(this);
+        f.setPadding(dp(24), dp(8), dp(24), 0);
+        f.addView(e);
+        dlg().setTitle(title).setView(f).setPositiveButton("حفظ", (d, w) -> {
+            String v = e.getText().toString().trim();
+            if (!v.isEmpty()) cb.on(v);
+        }).setNegativeButton("إلغاء", null).show();
+    }
+
+    void libRow(LinearLayout parent, AdhanLib.Sound s) {
+        LinearLayout r = new LinearLayout(this);
+        r.setGravity(Gravity.CENTER_VERTICAL);
+        r.setPadding(0, dp(6), 0, dp(6));
+        String tag = "";
+        if (s.id.equals(p.getString("adhan_main", ""))) tag += " · الأذان";
+        if (s.id.equals(p.getString("adhan_fajr", AdhanLib.SAME))) tag += " · الفجر";
+        TextView n = tv("🎵 " + s.name + tag, 16, TXT, false);
+        n.setPadding(0, dp(8), 0, dp(8));
+        n.setOnClickListener(v -> askText("تغيير الاسم", s.name, x -> { AdhanLib.rename(this, s.id, x); show(3); }));
+        ripple(n);
+        r.addView(n, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView play = tv("▶️", 22, TXT, false);
+        play.setPadding(dp(12), dp(6), dp(12), dp(6));
+        play.setOnClickListener(v -> AdhanService.start(this, Prayer.DHUHR, true, s.id));
+        ripple(play);
+        r.addView(play);
+        TextView del = tv("🗑", 20, TXT, false);
+        del.setPadding(dp(12), dp(6), dp(4), dp(6));
+        del.setOnClickListener(v -> dlg().setTitle("حذف «" + s.name + "»؟")
+                .setPositiveButton("حذف", (d, w) -> { AdhanLib.delete(this, s.id); show(3); })
+                .setNegativeButton("إلغاء", null).show());
+        ripple(del);
+        r.addView(del);
+        parent.addView(r);
+    }
+
+    void pickSound(boolean fajr) {
+        ArrayList<AdhanLib.Sound> lib = AdhanLib.list(this);
+        ArrayList<String> ids = new ArrayList<>(), names = new ArrayList<>();
+        if (fajr) { ids.add(AdhanLib.SAME); names.add("↔️ نفس صوت الأذان"); }
+        ids.add("");
+        names.add("🔔 نغمة المنبّه الافتراضية");
+        for (AdhanLib.Sound s : lib) { ids.add(s.id); names.add("🎵 " + s.name); }
+        if (lib.isEmpty()) toast("المكتبة فارغة: أضف ملفات أذان من «مكتبة الأذان» بالأسفل");
+        choose(fajr ? "صوت أذان الفجر" : "صوت الأذان", names.toArray(new String[0]), w -> {
+            p.edit().putString(fajr ? "adhan_fajr" : "adhan_main", ids.get(w)).apply();
+            show(3);
+        });
+    }
+
+    boolean canFullScreen() {
+        if (Build.VERSION.SDK_INT < 34) return true;
+        android.app.NotificationManager nm = getSystemService(android.app.NotificationManager.class);
+        return nm == null || nm.canUseFullScreenIntent();
+    }
+
+    void openFullScreenSettings() {
+        try {
+            startActivity(new Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:" + getPackageName())));
+        } catch (Throwable e) {
+            openAppDetails();
         }
     }
 
